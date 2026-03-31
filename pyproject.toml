@@ -1,0 +1,8 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plugin_juniper"
+version = "1.0.0"
+description = "A plugin for Juniper devices"

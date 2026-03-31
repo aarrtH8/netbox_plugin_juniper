@@ -2,11 +2,12 @@ from django.views.generic import TemplateView, View
 from django.shortcuts import render, get_object_or_404, redirect
 from dcim.models import Device, Interface
 from ipam.models import IPAddress, VLAN, Prefix
-from extras.models import Tag
+from extras.models import Tag, CustomField
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib import messages
 from django.db.models import Q
 from django.utils.text import slugify
+from django.contrib.contenttypes.models import ContentType
 from .forms import SSHForm
 import paramiko
 import re
@@ -14,6 +15,32 @@ import ipaddress
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+SQUAD_CUSTOM_FIELD_NAME = "squad"
+SQUAD_CUSTOM_FIELD_VALUE = "DC Network"
+
+
+def _set_squad_custom_field(obj, enabled):
+    """Ajoute/force la valeur du custom field squad quand il existe."""
+    if not enabled:
+        return
+
+    data = dict(getattr(obj, "custom_field_data", {}) or {})
+    if data.get(SQUAD_CUSTOM_FIELD_NAME) == SQUAD_CUSTOM_FIELD_VALUE:
+        return
+
+    data[SQUAD_CUSTOM_FIELD_NAME] = SQUAD_CUSTOM_FIELD_VALUE
+    obj.custom_field_data = data
+    obj.save()
+
+
+def _guess_interface_type(iface_name):
+    if iface_name.startswith("ae"):
+        return "lag"
+    if "." in iface_name:
+        return "virtual"
+    return "other"
 
 
 class FirewallListView(LoginRequiredMixin, TemplateView):
@@ -99,6 +126,13 @@ class FirewallScanView(LoginRequiredMixin, View):
                 "show configuration security zones | display set"
             )
             output_zones = stdout.read().decode('utf-8', errors='ignore')
+
+            # Récupération des membres LACP (LAG)
+            logger.info(f"Récupération des interfaces LACP pour {device.name}")
+            stdin, stdout, stderr = ssh.exec_command(
+                "show configuration interfaces | display set | match 802.3ad"
+            )
+            output_lacp = stdout.read().decode('utf-8', errors='ignore')
             
             ssh.close()
             logger.info(f"Connexion SSH fermée pour {device.name}")
@@ -126,6 +160,13 @@ class FirewallScanView(LoginRequiredMixin, View):
                     
                     logger.info(f"Interface {interface_name} associée à la zone {zone_name}")
 
+            # Parsing des interfaces membres d'un LAG
+            lag_members = {}
+            for line in output_lacp.splitlines():
+                m = re.match(r"set interfaces (\S+) ether-options 802\.3ad (\S+)", line.strip())
+                if m:
+                    lag_members[m.group(1)] = m.group(2)
+
             # Parsing des interfaces et adresses
             for line in output_addr.splitlines():
                 m = re.match(r"set interfaces (\S+) unit (\d+) family inet address (\S+)", line.strip())
@@ -147,6 +188,7 @@ class FirewallScanView(LoginRequiredMixin, View):
                         "base_iface": base_iface,
                         "desc": desc,
                         "security_zone": zone,
+                        "parent_lag": lag_members.get(base_iface),
                     })
 
             # Calculer les zones uniques
@@ -204,6 +246,9 @@ class FirewallPushView(LoginRequiredMixin, View):
         results = []
         errors = []
         zones_created = {}
+        squad_custom_field_exists = CustomField.objects.filter(name=SQUAD_CUSTOM_FIELD_NAME).exists()
+
+        _set_squad_custom_field(device, squad_custom_field_exists)
 
         logger.info(f"Début de l'intégration pour {device.name}: {len(interfaces)} interfaces à traiter")
 
@@ -231,17 +276,44 @@ class FirewallPushView(LoginRequiredMixin, View):
             base_iface = item['base_iface']
             desc = item['desc']
             security_zone = item.get('security_zone')
+            parent_lag = item.get('parent_lag')
 
             try:
-                # Création/mise à jour de l'interface
+                # Création/mise à jour du LAG parent et du membre physique si nécessaire
+                if parent_lag:
+                    lag_iface, _ = Interface.objects.get_or_create(
+                        device=device,
+                        name=parent_lag,
+                        defaults={"type": "lag", "description": f"LAG {parent_lag}"}
+                    )
+                    _set_squad_custom_field(lag_iface, squad_custom_field_exists)
+
+                    member_iface, _ = Interface.objects.get_or_create(
+                        device=device,
+                        name=base_iface,
+                        defaults={"type": _guess_interface_type(base_iface)}
+                    )
+                    if member_iface.lag_id != lag_iface.id:
+                        member_iface.lag = lag_iface
+                        member_iface.save()
+                    _set_squad_custom_field(member_iface, squad_custom_field_exists)
+
+                # Création/mise à jour de l'interface logique
                 iface, created = Interface.objects.get_or_create(
                     device=device,
                     name=iface_full,
-                    defaults={"type": "virtual", "description": desc}
+                    defaults={"type": _guess_interface_type(iface_full), "description": desc}
                 )
-                if not created and iface.description != desc:
+                iface_updated = False
+                if iface.description != desc:
                     iface.description = desc
+                    iface_updated = True
+                if not iface.type:
+                    iface.type = _guess_interface_type(iface_full)
+                    iface_updated = True
+                if iface_updated:
                     iface.save()
+                _set_squad_custom_field(iface, squad_custom_field_exists)
                 
                 logger.info(f"Interface {iface_full} {'créée' if created else 'mise à jour'}")
 
@@ -252,30 +324,56 @@ class FirewallPushView(LoginRequiredMixin, View):
                         iface.tags.add(zone_tag)
                         logger.info(f"Tag '{security_zone}' ajouté à l'interface {iface_full}")
 
-                # Création/mise à jour du VLAN
-                vlan, vlan_created = VLAN.objects.get_or_create(
-                    vid=int(vlan_id),
-                    site=site,
-                    defaults={"name": desc, "tenant": tenant}
-                )
+                # Création/mise à jour du VLAN (recherche globale pour éviter les doublons)
+                vlan = VLAN.objects.filter(vid=int(vlan_id), site=site).first() or VLAN.objects.filter(vid=int(vlan_id)).first()
+                vlan_created = False
+                if not vlan:
+                    vlan = VLAN.objects.create(vid=int(vlan_id), site=site, name=desc, tenant=tenant)
+                    vlan_created = True
+                else:
+                    vlan_changed = False
+                    if desc and vlan.name != desc:
+                        vlan.name = desc
+                        vlan_changed = True
+                    if tenant and vlan.tenant_id != tenant.id:
+                        vlan.tenant = tenant
+                        vlan_changed = True
+                    if not vlan.site_id and site:
+                        vlan.site = site
+                        vlan_changed = True
+                    if vlan_changed:
+                        vlan.save()
+                _set_squad_custom_field(vlan, squad_custom_field_exists)
                 logger.info(f"VLAN {vlan_id} {'créé' if vlan_created else 'existant'}")
 
                 # Création/mise à jour de l'IP
                 ip_obj, ip_created = IPAddress.objects.get_or_create(
                     address=ip_addr,
                     defaults={
-                        "assigned_object_type": Interface._meta.label_lower.replace('.', ' '),
-                        "assigned_object_id": iface.id,
                         "status": "active",
                         "tenant": tenant,
                     }
                 )
-                
-                if not ip_created and not ip_obj.assigned_object_id:
-                    ip_obj.assigned_object = iface
+
+                interface_content_type = ContentType.objects.get_for_model(Interface)
+
+                ip_changed = False
+                if ip_obj.assigned_object_type_id != interface_content_type.id:
+                    ip_obj.assigned_object_type = interface_content_type
+                    ip_changed = True
+                if ip_obj.assigned_object_id != iface.id:
+                    ip_obj.assigned_object_id = iface.id
+                    ip_changed = True
+                if tenant and ip_obj.tenant_id != tenant.id:
                     ip_obj.tenant = tenant
+                    ip_changed = True
+                if ip_obj.status != "active":
+                    ip_obj.status = "active"
+                    ip_changed = True
+                if ip_changed:
                     ip_obj.save()
-                
+                _set_squad_custom_field(ip_obj, squad_custom_field_exists)
+
                 logger.info(f"IP {ip_addr} {'créée' if ip_created else 'mise à jour'}")
 
                 # Création du prefix (réseau)
@@ -290,6 +388,19 @@ class FirewallPushView(LoginRequiredMixin, View):
                             "site": site,
                         }
                     )
+                    prefix_changed = False
+                    if prefix_obj.vlan_id != vlan.id:
+                        prefix_obj.vlan = vlan
+                        prefix_changed = True
+                    if tenant and prefix_obj.tenant_id != tenant.id:
+                        prefix_obj.tenant = tenant
+                        prefix_changed = True
+                    if site and prefix_obj.site_id != site.id:
+                        prefix_obj.site = site
+                        prefix_changed = True
+                    if prefix_changed:
+                        prefix_obj.save()
+                    _set_squad_custom_field(prefix_obj, squad_custom_field_exists)
                     logger.info(f"Prefix {network} {'créé' if prefix_created else 'existant'}")
                 except Exception as e:
                     logger.warning(f"Could not create prefix for {ip_addr}: {e}")

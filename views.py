@@ -7,7 +7,6 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib import messages
 from django.db.models import Q
 from django.utils.text import slugify
-from django.contrib.contenttypes.models import ContentType
 from .forms import SSHForm
 import paramiko
 import re
@@ -269,8 +268,6 @@ class FirewallPushView(LoginRequiredMixin, View):
             except Exception as e:
                 logger.error(f"Erreur lors de la création du tag {zone_name}: {e}")
 
-        interface_content_type = ContentType.objects.get_for_model(Interface)
-
         for item in interfaces:
             iface_full = item['iface_full']
             vlan_id = item['vlan_id']
@@ -358,11 +355,8 @@ class FirewallPushView(LoginRequiredMixin, View):
                 )
 
                 ip_changed = False
-                if ip_obj.assigned_object_type_id != interface_content_type.id:
-                    ip_obj.assigned_object_type = interface_content_type
-                    ip_changed = True
                 if ip_obj.assigned_object_id != iface.id:
-                    ip_obj.assigned_object_id = iface.id
+                    ip_obj.assigned_object = iface
                     ip_changed = True
                 if tenant and ip_obj.tenant_id != tenant.id:
                     ip_obj.tenant = tenant

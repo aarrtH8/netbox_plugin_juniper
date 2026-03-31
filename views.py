@@ -7,6 +7,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib import messages
 from django.db.models import Q
 from django.utils.text import slugify
+from django.contrib.contenttypes.models import ContentType
 from .forms import SSHForm
 import paramiko
 import re
@@ -346,10 +347,11 @@ class FirewallPushView(LoginRequiredMixin, View):
                 logger.info(f"VLAN {vlan_id} {'créé' if vlan_created else 'existant'}")
 
                 # Création/mise à jour de l'IP
+                interface_content_type = ContentType.objects.get_for_model(Interface)
                 ip_obj, ip_created = IPAddress.objects.get_or_create(
                     address=ip_addr,
                     defaults={
-                        "assigned_object_type": Interface._meta.label_lower.replace('.', ' '),
+                        "assigned_object_type": interface_content_type,
                         "assigned_object_id": iface.id,
                         "status": "active",
                         "tenant": tenant,

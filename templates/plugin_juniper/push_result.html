@@ -1,0 +1,219 @@
+{% extends "base/layout.html" %}
+{% load static %}
+
+{% block title %}Intégration terminée{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-10 offset-md-1">
+        
+        <!-- Messages -->
+        {% if messages %}
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                <strong>
+                    {% if message.tags == 'error' %}<i class="mdi mdi-alert-circle"></i>
+                    {% elif message.tags == 'success' %}<i class="mdi mdi-check-circle"></i>
+                    {% elif message.tags == 'warning' %}<i class="mdi mdi-alert"></i>
+                    {% else %}<i class="mdi mdi-information"></i>{% endif %}
+                </strong>
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert">&times;</button>
+            </div>
+            {% endfor %}
+        {% endif %}
+
+        <!-- En-tête succès -->
+        <div class="card border-success mb-4">
+            <div class="card-header bg-success text-white text-center py-4">
+                <i class="mdi mdi-check-circle" style="font-size: 64px;"></i>
+                <h2 class="mt-3 mb-0">Intégration réussie !</h2>
+                <p class="mb-0 mt-2">Les données ont été synchronisées avec NetBox</p>
+            </div>
+        </div>
+
+        <!-- Infos de l'équipement -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5><i class="mdi mdi-router-wireless"></i> Équipement traité</h5>
+                <p class="mb-0">
+                    <strong>{{ device.name }}</strong>
+                    <a href="/dcim/devices/{{ device.id }}/" class="btn btn-sm btn-outline-primary ml-3" target="_blank">
+                        <i class="mdi mdi-eye"></i> Voir dans NetBox
+                    </a>
+                </p>
+            </div>
+        </div>
+
+        <!-- Statistiques -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card {% if results %}bg-success{% else %}bg-secondary{% endif %} text-white text-center">
+                    <div class="card-body">
+                        <h2 class="mb-0">{{ results|length }}</h2>
+                        <p class="mb-0">Élément(s) intégré(s)</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card {% if results %}bg-primary{% else %}bg-secondary{% endif %} text-white text-center">
+                    <div class="card-body">
+                        <h2 class="mb-0">{{ results|length }}</h2>
+                        <p class="mb-0">Interface(s) créée(s)</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card {% if zones_created %}bg-warning{% else %}bg-secondary{% endif %} text-white text-center">
+                    <div class="card-body">
+                        <h2 class="mb-0">{{ zones_created|length }}</h2>
+                        <p class="mb-0">Security Zone(s)</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card {% if errors %}bg-danger{% else %}bg-success{% endif %} text-white text-center">
+                    <div class="card-body">
+                        <h2 class="mb-0">{% if errors %}{{ errors|length }}{% else %}0{% endif %}</h2>
+                        <p class="mb-0">Erreur(s)</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security Zones créées -->
+        {% if zones_created %}
+        <div class="card mb-4 border-warning">
+            <div class="card-header bg-warning text-dark">
+                <strong><i class="mdi mdi-shield-check"></i> Security Zones créées/mises à jour</strong>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    {% for zone_name, tag in zones_created.items %}
+                    <div class="col-md-4 mb-2">
+                        <span class="badge badge-warning badge-lg p-2">
+                            <i class="mdi mdi-shield-check"></i> {{ zone_name }}
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <hr>
+                <small class="text-muted">
+                    <i class="mdi mdi-information-outline"></i> 
+                    Les security zones sont créées en tant que <strong>Tags</strong> dans NetBox et sont assignées automatiquement aux interfaces correspondantes.
+                </small>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Détails des résultats avec SCROLL -->
+        {% if results %}
+        <div class="card mb-4">
+            <div class="card-header bg-light">
+                <strong><i class="mdi mdi-check-circle"></i> Détails de l'intégration</strong>
+                <span class="badge badge-info float-right">{{ results|length }} interface(s)</span>
+            </div>
+            <div style="max-height: 400px; overflow-y: auto; overflow-x: hidden;">
+                <table class="table table-hover table-striped mb-0">
+                    <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
+                        <tr>
+                            <th width="80">Statut</th>
+                            <th>Interface</th>
+                            <th>Adresse IP</th>
+                            <th>VLAN</th>
+                            <th>Security Zone</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for res in results %}
+                        <tr>
+                            <td><span class="badge badge-success"><i class="mdi mdi-check"></i> OK</span></td>
+                            <td><strong>{{ res.interface }}</strong></td>
+                            <td><code>{{ res.ip }}</code></td>
+                            <td><span class="badge badge-info">{{ res.vlan }}</span></td>
+                            <td>
+                                {% if res.security_zone %}
+                                    <span class="badge badge-warning">{{ res.security_zone }}</span>
+                                {% else %}
+                                    <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ res.desc }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer text-muted text-center">
+                <small><i class="mdi mdi-information-outline"></i> Faites défiler pour voir toutes les interfaces</small>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Erreurs -->
+        {% if errors %}
+        <div class="card mb-4 border-danger">
+            <div class="card-header bg-danger text-white">
+                <strong><i class="mdi mdi-alert-circle"></i> Erreurs rencontrées</strong>
+                <span class="badge badge-light float-right">{{ errors|length }} erreur(s)</span>
+            </div>
+            <div style="max-height: 300px; overflow-y: auto; overflow-x: hidden;">
+                <table class="table table-hover mb-0">
+                    <thead style="position: sticky; top: 0; background: white; z-index: 10;">
+                        <tr>
+                            <th>Interface</th>
+                            <th>Erreur</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for err in errors %}
+                        <tr>
+                            <td><strong>{{ err.interface }}</strong></td>
+                            <td><span class="text-danger">{{ err.error }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Actions -->
+        <div class="text-center">
+            <a href="{% url 'plugins:plugin_juniper:firewall_list' %}" class="btn btn-primary btn-lg">
+                <i class="mdi mdi-reload"></i> Scanner un autre firewall
+            </a>
+            <a href="/dcim/devices/{{ device.id }}/" class="btn btn-success btn-lg" target="_blank">
+                <i class="mdi mdi-eye"></i> Voir {{ device.name }} dans NetBox
+            </a>
+        </div>
+
+    </div>
+</div>
+
+<style>
+/* Amélioration du scroll */
+div[style*="overflow-y: auto"] {
+    scrollbar-width: thin;
+    scrollbar-color: #6c757d #f8f9fa;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar {
+    width: 8px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-track {
+    background: #f8f9fa;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb {
+    background-color: #6c757d;
+    border-radius: 4px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb:hover {
+    background-color: #495057;
+}
+</style>
+{% endblock %}

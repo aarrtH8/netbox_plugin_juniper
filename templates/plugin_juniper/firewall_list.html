@@ -1,0 +1,227 @@
+{% extends "base/layout.html" %}
+{% load static %}
+
+{% block title %}Scanner Juniper{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        
+        <!-- En-tête -->
+        <div class="card border-primary mb-4">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">
+                    <i class="mdi mdi-radar"></i> Scanner Firewall Juniper
+                </h4>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-0">
+                    <i class="mdi mdi-information-outline"></i> 
+                    Sélectionnez un firewall Juniper, entrez vos identifiants SSH et lancez le scan pour récupérer la configuration des interfaces.
+                </p>
+            </div>
+        </div>
+
+        <!-- Messages -->
+        {% if messages %}
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                <strong>
+                    {% if message.tags == 'error' %}
+                        <i class="mdi mdi-alert-circle"></i>
+                    {% elif message.tags == 'success' %}
+                        <i class="mdi mdi-check-circle"></i>
+                    {% elif message.tags == 'warning' %}
+                        <i class="mdi mdi-alert"></i>
+                    {% else %}
+                        <i class="mdi mdi-information"></i>
+                    {% endif %}
+                </strong>
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            {% endfor %}
+        {% endif %}
+
+        {% if firewalls %}
+        <!-- Formulaire principal -->
+        <div class="card">
+            <div class="card-header">
+                <strong><i class="mdi mdi-cog"></i> Configuration du scan</strong>
+            </div>
+            <div class="card-body">
+                <form method="post" id="scanForm">
+                    {% csrf_token %}
+                    
+                    <!-- Sélection du firewall -->
+                    <div class="form-group">
+                        <label for="device_id">
+                            <i class="mdi mdi-firewall"></i> <strong>Firewall à scanner</strong>
+                        </label>
+                        <select class="form-control form-control-lg" id="device_id" name="device_id" required onchange="updateDeviceInfo()">
+                            <option value="">-- Sélectionnez un firewall --</option>
+                            {% for fw in firewalls %}
+                            <option value="{{ fw.id }}" 
+                                    data-site="{{ fw.site.name|default:'Non défini' }}"
+                                    data-tenant="{{ fw.tenant.name|default:'Non défini' }}"
+                                    data-type="{{ fw.device_type }}"
+                                    data-ip="{% if fw.primary_ip4 %}{{ fw.primary_ip4.address }}{% elif fw.primary_ip6 %}{{ fw.primary_ip6.address }}{% else %}Non configurée{% endif %}">
+                                {{ fw.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <small class="form-text text-muted">{{ firewalls.count }} firewall(s) Juniper actif(s) disponible(s)</small>
+                    </div>
+
+                    <!-- Infos du device sélectionné -->
+                    <div id="deviceInfo" class="alert alert-info" style="display: none;">
+                        <strong><i class="mdi mdi-information"></i> Informations de l'équipement</strong>
+                        <ul class="mb-0 mt-2">
+                            <li><strong>Type :</strong> <span id="info-type"></span></li>
+                            <li><strong>Site :</strong> <span id="info-site"></span></li>
+                            <li><strong>Tenant :</strong> <span id="info-tenant"></span></li>
+                            <li><strong>IP Principale :</strong> <code id="info-ip"></code></li>
+                        </ul>
+                    </div>
+
+                    <hr>
+
+                    <!-- Identifiants SSH -->
+                    <div class="form-group">
+                        <label for="ssh_user">
+                            <i class="mdi mdi-account"></i> <strong>Utilisateur SSH</strong>
+                        </label>
+                        <input type="text" 
+                               class="form-control" 
+                               id="ssh_user" 
+                               name="ssh_user" 
+                               value="juniper" 
+                               placeholder="Nom d'utilisateur SSH"
+                               required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ssh_pass">
+                            <i class="mdi mdi-lock"></i> <strong>Mot de passe SSH</strong>
+                        </label>
+                        <input type="password" 
+                               class="form-control" 
+                               id="ssh_pass" 
+                               name="ssh_pass" 
+                               placeholder="Mot de passe SSH"
+                               required>
+                        <small class="form-text text-muted">
+                            <i class="mdi mdi-shield-lock"></i> Le mot de passe n'est jamais stocké et est utilisé uniquement pour la connexion SSH
+                        </small>
+                    </div>
+
+                    <hr>
+
+                    <!-- Bouton de scan -->
+                    <div class="text-center">
+                        <button type="submit" class="btn btn-primary btn-lg" id="scanButton" disabled>
+                            <i class="mdi mdi-radar"></i> Lancer le scan
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Aide -->
+        <div class="card mt-4 border-info">
+            <div class="card-header bg-info text-white">
+                <strong><i class="mdi mdi-help-circle"></i> Aide</strong>
+            </div>
+            <div class="card-body">
+                <h6><strong>Comment ça fonctionne ?</strong></h6>
+                <ol>
+                    <li>Sélectionnez un firewall Juniper dans la liste</li>
+                    <li>Entrez vos identifiants SSH (utilisateur en lecture seule recommandé)</li>
+                    <li>Cliquez sur "Lancer le scan"</li>
+                    <li>Le plugin se connecte en SSH et récupère la configuration</li>
+                    <li>Vérifiez les interfaces détectées</li>
+                    <li>Intégrez-les dans NetBox en un clic</li>
+                </ol>
+                <hr>
+                <h6><strong>Commandes Junos exécutées :</strong></h6>
+                <ul>
+                    <li><code>show configuration interfaces | display set | match address</code></li>
+                    <li><code>show configuration interfaces | display set | match description</code></li>
+                </ul>
+            </div>
+        </div>
+
+        {% else %}
+        <!-- Aucun firewall -->
+        <div class="card border-warning">
+            <div class="card-header bg-warning text-dark">
+                <h4 class="mb-0"><i class="mdi mdi-alert"></i> Aucun firewall trouvé</h4>
+            </div>
+            <div class="card-body">
+                <p>Aucun appareil Juniper actif n'a été trouvé dans NetBox.</p>
+                <hr>
+                <h6><strong>Critères de recherche :</strong></h6>
+                <ul>
+                    <li>Statut : Active</li>
+                    <li>Fabricant : contient "Juniper" (insensible à la casse)</li>
+                    <li>IP principale configurée (IPv4 ou IPv6)</li>
+                </ul>
+                <hr>
+                <a href="/dcim/devices/add/" class="btn btn-primary">
+                    <i class="mdi mdi-plus"></i> Ajouter un device
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+</div>
+
+<script>
+// Fonction pour mettre à jour les infos du device
+function updateDeviceInfo() {
+    const select = document.getElementById('device_id');
+    const deviceInfo = document.getElementById('deviceInfo');
+    const scanButton = document.getElementById('scanButton');
+    const selectedOption = select.options[select.selectedIndex];
+    
+    if (select.value) {
+        // Afficher les infos
+        document.getElementById('info-type').textContent = selectedOption.dataset.type;
+        document.getElementById('info-site').textContent = selectedOption.dataset.site;
+        document.getElementById('info-tenant').textContent = selectedOption.dataset.tenant;
+        document.getElementById('info-ip').textContent = selectedOption.dataset.ip;
+        
+        deviceInfo.style.display = 'block';
+        scanButton.disabled = false;
+        
+        // Mettre à jour l'action du formulaire
+        const form = document.getElementById('scanForm');
+        form.action = '/plugins/juniper/scan/' + select.value + '/';
+    } else {
+        deviceInfo.style.display = 'none';
+        scanButton.disabled = true;
+    }
+}
+
+// Validation du formulaire
+document.getElementById('scanForm').addEventListener('submit', function(e) {
+    const device = document.getElementById('device_id').value;
+    const user = document.getElementById('ssh_user').value;
+    const pass = document.getElementById('ssh_pass').value;
+    
+    if (!device || !user || !pass) {
+        e.preventDefault();
+        alert('Veuillez remplir tous les champs');
+        return false;
+    }
+    
+    // Désactiver le bouton pour éviter les double-clics
+    const btn = document.getElementById('scanButton');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="mdi mdi-loading mdi-spin"></i> Scan en cours...';
+});
+</script>
+{% endblock %}

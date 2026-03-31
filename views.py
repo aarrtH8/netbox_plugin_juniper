@@ -7,7 +7,6 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib import messages
 from django.db.models import Q
 from django.utils.text import slugify
-from django.contrib.contenttypes.models import ContentType
 from .forms import SSHForm
 import paramiko
 import re
@@ -347,23 +346,26 @@ class FirewallPushView(LoginRequiredMixin, View):
                 logger.info(f"VLAN {vlan_id} {'créé' if vlan_created else 'existant'}")
 
                 # Création/mise à jour de l'IP
-                interface_content_type = ContentType.objects.get_for_model(Interface)
                 ip_obj, ip_created = IPAddress.objects.get_or_create(
                     address=ip_addr,
                     defaults={
-                        "assigned_object_type": interface_content_type,
-                        "assigned_object_id": iface.id,
                         "status": "active",
                         "tenant": tenant,
                     }
                 )
-                
-                if (not ip_obj.assigned_object_id) or (ip_obj.assigned_object_id != iface.id):
+
+                ip_changed = False
+                if ip_obj.assigned_object_id != iface.id:
                     ip_obj.assigned_object = iface
+                    ip_changed = True
                 if tenant and ip_obj.tenant_id != tenant.id:
                     ip_obj.tenant = tenant
-                ip_obj.status = "active"
-                ip_obj.save()
+                    ip_changed = True
+                if ip_obj.status != "active":
+                    ip_obj.status = "active"
+                    ip_changed = True
+                if ip_changed:
+                    ip_obj.save()
                 _set_squad_custom_field(ip_obj, squad_custom_field_exists)
 
                 logger.info(f"IP {ip_addr} {'créée' if ip_created else 'mise à jour'}")
